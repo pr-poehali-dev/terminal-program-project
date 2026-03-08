@@ -24,6 +24,7 @@ const fileIcon = (f: FileItem) => {
   if (f.type === 'dir') return '📁';
   const ext = f.name.split('.').pop()?.toLowerCase();
   if (ext === 'mp3') return '♪';
+  if (ext === 'exe') return '▶';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext || '')) return '◉';
   if (['txt', 'md', 'log'].includes(ext || '')) return '▤';
   if (['js', 'ts', 'py', 'sh', 'json'].includes(ext || '')) return '◈';
@@ -33,6 +34,7 @@ const fileIcon = (f: FileItem) => {
 const fileColor = (f: FileItem) => {
   if (f.type === 'dir') return 'var(--term-yellow)';
   const ext = f.name.split('.').pop()?.toLowerCase();
+  if (ext === 'exe') return 'var(--term-red)';
   if (ext === 'mp3') return 'var(--term-green)';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext || '')) return 'var(--term-cyan)';
   if (['js', 'ts', 'py', 'sh'].includes(ext || '')) return 'var(--term-blue)';

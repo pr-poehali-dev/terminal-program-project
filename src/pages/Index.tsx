@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import MusicPlayer from '@/components/MusicPlayer';
 import ImageViewer from '@/components/ImageViewer';
 import FileManager, { FileItem, FileSystem } from '@/components/FileManager';
+import ExeRunner from '@/components/ExeRunner';
 
 interface TermLine {
   id: number;
@@ -12,41 +13,71 @@ interface TermLine {
 
 interface Track { name: string; url: string; }
 interface ImageItem { name: string; url: string; }
+interface ExeApp { name: string; pid: number; startedAt: string; status: 'running' | 'stopped'; }
 
 const INITIAL_FS: FileSystem = {
   '/': [
     { name: 'музыка', type: 'dir' },
     { name: 'фото', type: 'dir' },
     { name: 'документы', type: 'dir' },
+    { name: 'программы', type: 'dir' },
     { name: 'README.txt', type: 'file', size: 512 },
     { name: 'config.json', type: 'file', size: 128 },
   ],
   '/музыка': [
+    { name: 'track_01.mp3', type: 'file', size: 4096000 },
+    { name: 'track_02.mp3', type: 'file', size: 3584000 },
     { name: 'playlist.m3u', type: 'file', size: 256 },
   ],
   '/фото': [
     { name: 'sample.jpg', type: 'file', size: 204800 },
+    { name: 'photo_001.png', type: 'file', size: 512000 },
   ],
   '/документы': [
     { name: 'заметки.txt', type: 'file', size: 1024 },
     { name: 'задачи.md', type: 'file', size: 2048 },
   ],
+  '/программы': [
+    { name: 'setup.exe', type: 'file', size: 20480000 },
+    { name: 'launcher.exe', type: 'file', size: 8192000 },
+    { name: 'tool.exe', type: 'file', size: 1024000 },
+  ],
 };
 
 const HELP_TEXT = `┌─────────────────────────────────────────────────┐
-│              TERM v1.0 — СПРАВКА                │
+│              TERM v1.1 — СПРАВКА                │
 └─────────────────────────────────────────────────┘
   TERM.Start          — запустить приложение
+
+  [ФАЙЛОВАЯ СИСТЕМА]
   ls / dir            — список файлов
   cd [папка]          — перейти в папку
   cd ..               — выйти из папки
   mkdir [имя]         — создать папку
   find [запрос]       — поиск файлов
-  play [файл.mp3]     — воспроизвести MP3
-  view [файл.img]     — просмотр картинки
-  files               — показать файловый менеджер
-  player              — показать плеер
-  viewer              — показать просмотрщик картинок
+  files               — показать/скрыть файловый менеджер
+
+  [МУЗЫКА / MP3]
+  play [файл.mp3]     — воспроизвести / добавить в очередь
+  pause               — пауза / продолжить
+  stop                — остановить воспроизведение
+  next                — следующий трек
+  prev                — предыдущий трек
+  queue               — показать очередь треков
+  playlist clear      — очистить плейлист
+  player              — показать/скрыть плеер
+
+  [ИЗОБРАЖЕНИЯ]
+  view [файл]         — просмотр картинки
+  viewer              — показать/скрыть просмотрщик
+
+  [ПРИЛОЖЕНИЯ .EXE]
+  run [файл.exe]      — запустить приложение
+  ps                  — список запущенных процессов
+  kill [имя/pid]      — завершить процесс
+  apps                — показать/скрыть менеджер процессов
+
+  [ПРОЧЕЕ]
   clear               — очистить экран
   help                — эта справка`;
 
@@ -73,11 +104,14 @@ export default function Index() {
   const [fs, setFs] = useState<FileSystem>(INITIAL_FS);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [images, setImages] = useState<ImageItem[]>([]);
+  const [exeApps, setExeApps] = useState<ExeApp[]>([]);
   const [showFiles, setShowFiles] = useState(false);
   const [showPlayer, setShowPlayer] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
+  const [showApps, setShowApps] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  const playerCmdRef = useRef<((cmd: string) => void) | null>(null);
   const [clock, setClock] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -217,9 +251,60 @@ export default function Index() {
       if (!arg) { addLine('error', 'укажите файл: play [файл.mp3]'); return; }
       addLine('info', `♪ загрузка трека: ${arg}`);
       const url = URL.createObjectURL(new Blob([], { type: 'audio/mpeg' }));
-      setTracks(prev => [...prev, { name: arg, url }]);
-      addLine('success', `✓ трек добавлен: ${arg}`);
+      setTracks(prev => {
+        const exists = prev.find(t => t.name === arg);
+        if (exists) return prev;
+        return [...prev, { name: arg, url }];
+      });
+      addLine('success', `✓ трек добавлен в очередь: ${arg}`);
       setShowPlayer(true);
+      if (playerCmdRef.current) playerCmdRef.current('play');
+      return;
+    }
+
+    if (lower === 'pause') {
+      if (tracks.length === 0) { addLine('error', 'нет активных треков'); return; }
+      if (playerCmdRef.current) playerCmdRef.current('pause');
+      addLine('info', '♪ пауза / продолжить');
+      return;
+    }
+
+    if (lower === 'stop') {
+      if (tracks.length === 0) { addLine('error', 'нет активных треков'); return; }
+      if (playerCmdRef.current) playerCmdRef.current('stop');
+      addLine('info', '♪ воспроизведение остановлено');
+      return;
+    }
+
+    if (lower === 'next') {
+      if (tracks.length === 0) { addLine('error', 'нет треков в очереди'); return; }
+      if (playerCmdRef.current) playerCmdRef.current('next');
+      addLine('info', '♪ следующий трек');
+      return;
+    }
+
+    if (lower === 'prev') {
+      if (tracks.length === 0) { addLine('error', 'нет треков в очереди'); return; }
+      if (playerCmdRef.current) playerCmdRef.current('prev');
+      addLine('info', '♪ предыдущий трек');
+      return;
+    }
+
+    if (lower === 'queue') {
+      if (tracks.length === 0) { addLine('info', '♪ очередь пуста'); return; }
+      addLine('info', `♪ очередь (${tracks.length} трек${tracks.length > 1 ? 'а' : ''})`);
+      tracks.forEach((t, i) => addLine('output', `  ${i + 1}. ${t.name}`));
+      return;
+    }
+
+    if (lower === 'playlist') {
+      if (arg === 'clear') {
+        setTracks([]);
+        if (playerCmdRef.current) playerCmdRef.current('stop');
+        addLine('success', '✓ плейлист очищен');
+      } else {
+        addLine('error', 'неизвестная команда. Используй: playlist clear');
+      }
       return;
     }
 
@@ -227,15 +312,58 @@ export default function Index() {
       if (!arg) { addLine('error', 'укажите файл: view [файл]'); return; }
       addLine('info', `◉ загрузка изображения: ${arg}`);
       const placeholder = `https://picsum.photos/seed/${encodeURIComponent(arg)}/400/300`;
-      setImages(prev => [...prev, { name: arg, url: placeholder }]);
+      setImages(prev => [...prev.filter(i => i.name !== arg), { name: arg, url: placeholder }]);
       addLine('success', `✓ изображение открыто: ${arg}`);
       setShowViewer(true);
+      return;
+    }
+
+    if (lower === 'run') {
+      if (!arg) { addLine('error', 'укажите файл: run [файл.exe]'); return; }
+      const ext = arg.split('.').pop()?.toLowerCase();
+      if (ext !== 'exe') { addLine('error', `неподдерживаемый тип: .${ext}. Только .exe`); return; }
+      const pid = Math.floor(Math.random() * 9000) + 1000;
+      const now = new Date().toLocaleTimeString('ru-RU');
+      const app: ExeApp = { name: arg, pid, startedAt: now, status: 'running' };
+      setExeApps(prev => [...prev, app]);
+      setShowApps(true);
+      addLines([
+        ['info', `▶ запуск процесса: ${arg}`],
+        ['info', `  ├── PID: ${pid}`],
+        ['info', `  ├── Выделение памяти... OK`],
+        ['info', `  ├── Загрузка модулей... OK`],
+        ['success', `  └── Процесс запущен [PID:${pid}]`],
+      ]);
+      return;
+    }
+
+    if (lower === 'ps') {
+      const running = exeApps.filter(a => a.status === 'running');
+      if (running.length === 0) { addLine('info', '  нет запущенных процессов'); return; }
+      addLine('info', '  PID    СТАТУС    ВРЕМЯ     ИМЯ');
+      addLine('info', '  ─────────────────────────────────');
+      running.forEach(a => {
+        addLine('output', `  ${a.pid}   RUNNING   ${a.startedAt}   ${a.name}`);
+      });
+      addLine('info', `  итого: ${running.length} процесс${running.length > 1 ? 'а' : ''}`);
+      return;
+    }
+
+    if (lower === 'kill') {
+      if (!arg) { addLine('error', 'укажите имя или PID: kill [имя/pid]'); return; }
+      const byPid = exeApps.find(a => String(a.pid) === arg && a.status === 'running');
+      const byName = exeApps.find(a => a.name === arg && a.status === 'running');
+      const target = byPid || byName;
+      if (!target) { addLine('error', `процесс не найден: ${arg}`); return; }
+      setExeApps(prev => prev.map(a => a.pid === target.pid ? { ...a, status: 'stopped' } : a));
+      addLine('success', `✓ процесс завершён: ${target.name} [PID:${target.pid}]`);
       return;
     }
 
     if (lower === 'files') { setShowFiles(v => !v); addLine('info', showFiles ? '▤ файловый менеджер скрыт' : '▤ файловый менеджер открыт'); return; }
     if (lower === 'player') { setShowPlayer(v => !v); addLine('info', showPlayer ? '♪ плеер скрыт' : '♪ плеер открыт'); return; }
     if (lower === 'viewer') { setShowViewer(v => !v); addLine('info', showViewer ? '◉ просмотрщик скрыт' : '◉ просмотрщик открыт'); return; }
+    if (lower === 'apps') { setShowApps(v => !v); addLine('info', showApps ? '▶ менеджер процессов скрыт' : '▶ менеджер процессов открыт'); return; }
 
     addLine('error', `неизвестная команда: "${command}". Введите "help"`);
   };
@@ -256,7 +384,7 @@ export default function Index() {
       setInput(next === -1 ? '' : history[next]);
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      const commands = ['help', 'clear', 'ls', 'dir', 'cd ', 'mkdir ', 'find ', 'play ', 'view ', 'files', 'player', 'viewer', 'TERM.Start'];
+      const commands = ['help', 'clear', 'ls', 'dir', 'cd ', 'mkdir ', 'find ', 'play ', 'pause', 'stop', 'next', 'prev', 'queue', 'playlist clear', 'view ', 'run ', 'ps', 'kill ', 'files', 'player', 'viewer', 'apps', 'TERM.Start'];
       const match = commands.find(c => c.toLowerCase().startsWith(input.toLowerCase()) && c.toLowerCase() !== input.toLowerCase());
       if (match) setInput(match);
     }
@@ -267,14 +395,27 @@ export default function Index() {
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'mp3') {
       const url = URL.createObjectURL(new Blob([], { type: 'audio/mpeg' }));
-      setTracks(prev => [...prev.filter(t => t.name !== file.name), { name: file.name, url }]);
+      setTracks(prev => {
+        if (prev.find(t => t.name === file.name)) return prev;
+        return [...prev, { name: file.name, url }];
+      });
       setShowPlayer(true);
-      addLine('success', `♪ трек открыт: ${file.name}`);
+      addLine('success', `♪ трек добавлен: ${file.name}`);
     } else if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext || '')) {
       const placeholder = `https://picsum.photos/seed/${encodeURIComponent(file.name)}/400/300`;
       setImages(prev => [...prev.filter(i => i.name !== file.name), { name: file.name, url: placeholder }]);
       setShowViewer(true);
       addLine('success', `◉ изображение открыто: ${file.name}`);
+    } else if (ext === 'exe') {
+      const pid = Math.floor(Math.random() * 9000) + 1000;
+      const now = new Date().toLocaleTimeString('ru-RU');
+      setExeApps(prev => [...prev, { name: file.name, pid, startedAt: now, status: 'running' }]);
+      setShowApps(true);
+      addLines([
+        ['info', `▶ запуск: ${file.name}`],
+        ['info', `  ├── PID: ${pid}`],
+        ['success', `  └── Процесс запущен [PID:${pid}]`],
+      ]);
     } else {
       addLine('info', `▪ выбран файл: ${file.name}`);
     }
@@ -308,7 +449,7 @@ export default function Index() {
             <div className="w-3 h-3 rounded-full" style={{ background: '#ffbd2e' }} />
             <div className="w-3 h-3 rounded-full" style={{ background: '#28ca41' }} />
           </div>
-          <span className="term-green glow-green text-sm font-bold tracking-widest">TERM v1.0</span>
+          <span className="term-green glow-green text-sm font-bold tracking-widest">TERM v1.1</span>
           <span className="term-muted text-xs">— командная утилита</span>
         </div>
         <div className="flex items-center gap-3">
@@ -339,6 +480,15 @@ export default function Index() {
               background: showViewer ? 'rgba(0,255,204,0.05)' : 'transparent',
             }}
           >◉ IMG</button>
+          <button
+            onClick={e => { e.stopPropagation(); setShowApps(v => !v); }}
+            className="text-xs px-2 py-0.5 border transition-all"
+            style={{
+              borderColor: showApps ? 'var(--term-red)' : 'var(--term-border)',
+              color: showApps ? 'var(--term-red)' : 'var(--term-muted)',
+              background: showApps ? 'rgba(255,68,68,0.05)' : 'transparent',
+            }}
+          >▶ APPS</button>
         </div>
       </div>
 
@@ -384,7 +534,7 @@ export default function Index() {
         </div>
 
         {/* Side panels */}
-        {(showFiles || showPlayer || showViewer) && (
+        {(showFiles || showPlayer || showViewer || showApps) && (
           <div
             className="flex flex-col gap-0 border-l overflow-y-auto flex-shrink-0"
             style={{ borderColor: 'var(--term-border)', width: 360, background: 'var(--term-bg)' }}
@@ -416,12 +566,31 @@ export default function Index() {
 
             {showPlayer && (
               <div className="border-b" style={{ borderColor: 'var(--term-border)' }}>
-                <MusicPlayer tracks={tracks} onClose={() => setShowPlayer(false)} />
+                <MusicPlayer
+                  tracks={tracks}
+                  onClose={() => setShowPlayer(false)}
+                  onLog={(msg) => addLine('info', msg)}
+                  cmdRef={playerCmdRef}
+                />
               </div>
             )}
 
             {showViewer && (
-              <ImageViewer images={images} onClose={() => setShowViewer(false)} />
+              <div className="border-b" style={{ borderColor: 'var(--term-border)' }}>
+                <ImageViewer images={images} onClose={() => setShowViewer(false)} />
+              </div>
+            )}
+
+            {showApps && (
+              <ExeRunner
+                apps={exeApps}
+                onKill={(pid) => {
+                  setExeApps(prev => prev.map(a => a.pid === pid ? { ...a, status: 'stopped' } : a));
+                  const app = exeApps.find(a => a.pid === pid);
+                  if (app) addLine('success', `✓ процесс завершён: ${app.name} [PID:${pid}]`);
+                }}
+                onClose={() => setShowApps(false)}
+              />
             )}
           </div>
         )}
